@@ -5,133 +5,167 @@ let modelURL = "https://teachablemachine.withgoogle.com/models/WMlLAhdMKq/model.
 // Détection des mains
 let handsDetector;
 let numHands = 0;
-let canvasElement;
-let canvasCtx;
+let handLandmarks = [];
 
 // Variables pour le jeu
 let player1Move = "En attente...";
 let player2Move = "En attente...";
 let scoreJoueur = 0;
 let scoreOrdi = 0;
-let gameHistory = [];
-let roundsToWin = 3; // Nombre de manches à gagner pour le tournoi
-let gameMode = "solo"; // "solo" ou "duo"
 let isGameActive = false;
+let gameMode = "solo"; // "solo" ou "duo"
+let roundsToWin = 3;
+let gameHistory = [];
+let confidence = 0;
+
+// Éléments DOM
+let videoElement;
+let canvasElement;
+let canvasCtx;
 
 // Fonction pour initialiser la détection de mains
 async function setupHandsDetection() {
-    handsDetector = new Hands({
+    const handsDetector = new Hands({
         locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
     });
 
     handsDetector.setOptions({
         maxNumHands: 2, // Détecte jusqu'à 2 mains
         modelComplexity: 1,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5
+        minDetectionConfidence: 0.7, // Augmenté pour plus de précision
+        minTrackingConfidence: 0.7
     });
-
-    canvasElement = document.getElementById("canvas");
-    canvasCtx = canvasElement.getContext("2d");
 
     handsDetector.onResults((results) => {
-        numHands = results.multiHandLandmarks.length; // Nombre de mains détectées
+        // Mettre à jour le nombre de mains détectées
+        numHands = results.multiHandLandmarks.length;
+        handLandmarks = results.multiHandLandmarks;
         
-        // Afficher le nombre de mains détectées
+        // Mise à jour de l'interface
         document.getElementById("hands-count").innerText = `Mains détectées: ${numHands}`;
         
-        // Dessiner les repères des mains sur le canvas
-        canvasCtx.save();
-        canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-        
-        // Dessiner l'image vidéo en miroir
-        canvasCtx.drawImage(
-            results.image, 0, 0, canvasElement.width, canvasElement.height
-        );
-        
-        // Dessiner les landmarks des mains
-        if (results.multiHandLandmarks) {
-            for (const landmarks of results.multiHandLandmarks) {
-                drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS,
-                              {color: '#00FF00', lineWidth: 3});
-                drawLandmarks(canvasCtx, landmarks, {
-                    color: '#FF0000', lineWidth: 1, radius: 3
-                });
-            }
+        // Dessiner les mains sur le canvas
+        drawHands(results);
+    });
+
+    return handsDetector;
+}
+
+// Dessiner les mains sur le canvas
+function drawHands(results) {
+    canvasCtx.save();
+    canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+    
+    // Dessiner d'abord la vidéo
+    canvasCtx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+    
+    // Dessiner les landmarks des mains
+    if (results.multiHandLandmarks) {
+        for (const landmarks of results.multiHandLandmarks) {
+            drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 3});
+            drawLandmarks(canvasCtx, landmarks, {color: '#FF0000', lineWidth: 1, radius: 3});
         }
-        
-        canvasCtx.restore();
-    });
-
-    const videoElement = document.getElementById("video");
+    }
     
-    // Ajuster la taille du canvas à celle de la vidéo
-    canvasElement.width = videoElement.width;
-    canvasElement.height = videoElement.height;
-    
-    const camera = new Camera(videoElement, {
-        onFrame: async () => {
-            await handsDetector.send({ image: videoElement });
-        },
-        width: 640,
-        height: 480
-    });
-
-    camera.start();
+    canvasCtx.restore();
 }
 
 // Fonction pour initialiser le modèle et la webcam
 async function setup() {
-    await tf.setBackend('cpu'); // Force le CPU pour éviter les erreurs WebGL
-    console.log("✅ Backend forcé sur CPU");
+    // Récupérer les éléments DOM
+    videoElement = document.getElementById("video");
+    canvasElement = document.getElementById("canvas");
+    canvasCtx = canvasElement.getContext('2d');
+    
+    // Dimensionner le canvas pour correspondre à la vidéo
+    canvasElement.width = 640;
+    canvasElement.height = 480;
+    
+    try {
+        await tf.setBackend('webgl'); // Essayer d'utiliser WebGL pour de meilleures performances
+        console.log("✅ Backend: WebGL");
+    } catch (e) {
+        await tf.setBackend('cpu'); // Fallback sur CPU si WebGL échoue
+        console.log("✅ Backend: CPU (fallback)");
+    }
 
-    await setupHandsDetection(); // Démarrer la détection des mains
-    classifier = await ml5.imageClassifier(modelURL, modelReady);
+    // Afficher l'indicateur de chargement
+    document.getElementById("loading-indicator").style.display = "flex";
 
-    let video = document.getElementById("video");
-    navigator.mediaDevices.getUserMedia({ video: true })
-        .then((stream) => {
-            video.srcObject = stream;
+    try {
+        // Initialiser la détection des mains
+        handsDetector = await setupHandsDetection();
+        
+        // Charger le modèle de classification
+        classifier = await ml5.imageClassifier(modelURL);
+        
+        console.log("✅ Modèle chargé avec succès !");
+        
+        // Configuration de la caméra
+        const camera = new Camera(videoElement, {
+            onFrame: async () => {
+                await handsDetector.send({ image: videoElement });
+            },
+            width: 640,
+            height: 480
         });
         
-    // Initialiser les boutons de l'interface
-    setupUI();
+        await camera.start();
+        console.log("✅ Caméra démarrée");
+        
+        // Masquer l'indicateur de chargement une fois tout chargé
+        document.getElementById("loading-indicator").style.display = "none";
+        // Afficher les contrôles du jeu
+        document.getElementById("game-controls").style.display = "block";
+        
+        // Initialiser les gestionnaires d'événements pour les boutons
+        setupEventListeners();
+        
+    } catch (error) {
+        console.error("Erreur lors de l'initialisation:", error);
+        document.getElementById("loading-indicator").innerHTML = `
+            <p style="color: red">Erreur lors du chargement: ${error.message}</p>
+            <button onclick="location.reload()" class="btn">Réessayer</button>
+        `;
+    }
 }
 
-// Configuration de l'interface utilisateur
-function setupUI() {
+// Initialiser les gestionnaires d'événements
+function setupEventListeners() {
     // Bouton pour changer de mode de jeu
-    document.getElementById("toggle-mode").addEventListener("click", toggleGameMode);
+    document.getElementById("toggle-mode").addEventListener("click", () => {
+        gameMode = gameMode === "solo" ? "duo" : "solo";
+        const modeText = gameMode === "solo" ? "Solo (vs IA)" : "Duo (2 joueurs)";
+        document.getElementById("toggle-mode").innerText = `Mode: ${modeText}`;
+        document.getElementById("game-info").innerText = `Mode: ${modeText}\nPremier à ${roundsToWin} victoires`;
+        
+        // Mettre à jour l'affichage du joueur 2
+        document.getElementById("move-p2").innerText = gameMode === "solo" ? "IA: En attente..." : "Joueur 2: En attente...";
+    });
     
-    // Bouton pour commencer une nouvelle partie
-    document.getElementById("start-game").addEventListener("click", startNewGame);
+    // Sélecteur de nombre de manches
+    document.getElementById("rounds-selector").addEventListener("change", (e) => {
+        roundsToWin = parseInt(e.target.value);
+        document.getElementById("game-info").innerText = `Mode: ${gameMode === "solo" ? "Solo (vs IA)" : "Duo (2 joueurs)"}\nPremier à ${roundsToWin} victoires`;
+    });
+    
+    // Bouton pour commencer la partie
+    document.getElementById("start-game").addEventListener("click", startGame);
     
     // Bouton pour réinitialiser les scores
     document.getElementById("reset-scores").addEventListener("click", resetScores);
-    
-    // Sélecteur pour le nombre de manches
-    document.getElementById("rounds-selector").addEventListener("change", function() {
-        roundsToWin = parseInt(this.value);
-        updateGameInfo();
-    });
-}
-
-// Fonction pour changer de mode de jeu
-function toggleGameMode() {
-    gameMode = gameMode === "solo" ? "duo" : "solo";
-    document.getElementById("toggle-mode").innerText = 
-        gameMode === "solo" ? "Mode: Solo (vs IA)" : "Mode: Duo (2 joueurs)";
-    updateGameInfo();
 }
 
 // Fonction pour commencer une nouvelle partie
-function startNewGame() {
+function startGame() {
+    if (isGameActive) return;
+    
     resetScores();
-    isGameActive = true;
+    document.getElementById("result").innerText = "Préparez-vous...";
     document.getElementById("start-game").innerText = "Partie en cours...";
     document.getElementById("start-game").disabled = true;
     
-    updateGameInfo();
+    isGameActive = true;
     startCountdown(classifyVideo);
 }
 
@@ -140,192 +174,218 @@ function resetScores() {
     scoreJoueur = 0;
     scoreOrdi = 0;
     gameHistory = [];
-    updateScoreboard();
-    updateGameHistory();
-}
-
-// Mettre à jour les informations du jeu
-function updateGameInfo() {
-    let infoText = `Mode: ${gameMode === "solo" ? "Solo (vs IA)" : "Duo (2 joueurs)"}<br>`;
-    infoText += `Premier à ${roundsToWin} victoires`;
-    document.getElementById("game-info").innerHTML = infoText;
-}
-
-// Fonction appelée lorsque le modèle est prêt
-function modelReady() {
-    console.log("✅ Modèle chargé avec succès !");
-    document.getElementById("loading-indicator").style.display = "none";
-    document.getElementById("game-controls").style.display = "block";
-    updateGameInfo();
+    
+    document.querySelector(".score-p1").innerText = "0";
+    document.querySelector(".score-p2").innerText = "0";
+    document.getElementById("game-history").innerHTML = "";
+    
+    document.getElementById("move-p1").innerText = "Joueur 1: En attente...";
+    document.getElementById("move-p2").innerText = gameMode === "solo" ? "IA: En attente..." : "Joueur 2: En attente...";
+    document.getElementById("result").innerText = "Prêt à jouer ?";
 }
 
 // Fonction pour classifier la vidéo et détecter Pierre-Feuille-Ciseaux
 function classifyVideo() {
     if (!isGameActive) return;
     
-    classifier.classify(document.getElementById("video"), gotResult);
+    if (numHands === 0) {
+        document.getElementById("result").innerText = "❓ Aucune main détectée. Montrez vos mains !";
+        setTimeout(classifyVideo, 1000);
+        return;
+    }
+    
+    classifier.classify(videoElement, gotResult);
 }
 
 // Fonction pour traiter les résultats après classification
 function gotResult(error, results) {
     if (error) {
-        console.error(error);
+        console.error("Erreur de classification:", error);
+        document.getElementById("result").innerText = `Erreur: ${error.message || "Classification échouée"}`;
+        setTimeout(classifyVideo, 1000);
         return;
     }
-
-    if (numHands === 1) {
-        player1Move = results[0].label;
-        
-        if (gameMode === "solo") {
-            player2Move = getRandomMove(); // L'ordi joue aléatoirement
-            evaluateRound();
-        } else {
-            player2Move = "En attente...";
-            document.getElementById("move-p1").innerText = `Joueur 1: ${player1Move}`;
-            document.getElementById("move-p2").innerText = `Joueur 2: En attente...`;
-            // Attendre la seconde main dans le mode duo
-        }
-    } else if (numHands === 2 && gameMode === "duo") {
-        // Essayer de classifier les deux mains séparément
-        // Note: Ceci est une simplification, une solution plus robuste nécessiterait 
-        // une segmentation plus précise des deux mains
-        classifier.classify(document.getElementById("video"), (error, secondResults) => {
-            if (error) {
-                console.error(error);
-                return;
-            }
+    
+    if (!results || results.length === 0) {
+        setTimeout(classifyVideo, 1000);
+        return;
+    }
+    
+    confidence = Math.round(results[0].confidence * 100);
+    
+    if (gameMode === "solo") {
+        // Mode solo: le joueur contre l'IA
+        if (numHands >= 1) {
             player1Move = results[0].label;
-            player2Move = secondResults[0].label; // Utiliser le second résultat pour la 2e main
-            evaluateRound();
-        });
+            player2Move = getRandomMove();
+            
+            finishRound();
+        } else {
+            document.getElementById("result").innerText = "❓ Montrez votre main pour jouer !";
+            setTimeout(classifyVideo, 1000);
+        }
     } else {
-        player1Move = "Aucune main";
-        player2Move = "Aucune main";
-        
-        if (isGameActive) {
-            startCountdown(classifyVideo);
+        // Mode duo: deux joueurs humains
+        if (numHands === 2) {
+            // Pour le mode duo, nous devons détecter séparément les deux mains
+            // Ici, nous utilisons simplement les coordonnées X pour différencier gauche/droite
+            
+            // Identifier les mains gauche et droite
+            let leftHandIndex = 0;
+            let rightHandIndex = 1;
+            
+            if (handLandmarks[0][0].x > handLandmarks[1][0].x) {
+                leftHandIndex = 1;
+                rightHandIndex = 0;
+            }
+            
+            // Pour simplifier, nous utilisons le même modèle pour les deux mains
+            // En production, il serait préférable d'avoir des régions d'intérêt séparées
+            player1Move = results[0].label; // Utilise le résultat pour la première main
+            
+            // Classificateur pour la deuxième main (normalement, on devrait cropper l'image)
+            classifier.classify(videoElement, (error, secondResults) => {
+                if (!error && secondResults && secondResults.length > 0) {
+                    player2Move = secondResults[0].label;
+                } else {
+                    player2Move = results[0].label; // Fallback
+                }
+                
+                finishRound();
+            });
+        } else {
+            document.getElementById("result").innerText = "❓ Deux mains sont nécessaires pour le mode duo !";
+            setTimeout(classifyVideo, 1000);
         }
     }
 }
 
-// Évaluer les résultats d'une manche
-function evaluateRound() {
-    document.getElementById("move-p1").innerText = `Joueur 1: ${player1Move}`;
+// Terminer le tour et déterminer le gagnant
+function finishRound() {
+    document.getElementById("move-p1").innerText = `Joueur 1: ${player1Move} (${confidence}%)`;
     document.getElementById("move-p2").innerText = `${gameMode === "solo" ? "IA" : "Joueur 2"}: ${player2Move}`;
     
-    determineWinner(player1Move, player2Move);
+    const winner = determineWinner(player1Move, player2Move);
+    let resultMessage = "";
     
-    // Vérifier si un joueur a gagné le tournoi
+    if (winner === 1) {
+        scoreJoueur++;
+        resultMessage = "🎉 Joueur 1 gagne !";
+    } else if (winner === 2) {
+        scoreOrdi++;
+        resultMessage = gameMode === "solo" ? "🔥 L'IA gagne !" : "🔥 Joueur 2 gagne !";
+    } else {
+        resultMessage = "🤝 Égalité !";
+    }
+    
+    // Mettre à jour le score
+    document.querySelector(".score-p1").innerText = scoreJoueur;
+    document.querySelector(".score-p2").innerText = scoreOrdi;
+    
+    // Ajouter à l'historique
+    addToHistory(player1Move, player2Move, winner);
+    
+    // Vérifier si la partie est terminée
     if (scoreJoueur >= roundsToWin || scoreOrdi >= roundsToWin) {
-        endGame();
-    } else if (isGameActive) {
-        // Continuer la partie
-        setTimeout(() => {
-            startCountdown(classifyVideo);
-        }, 2000);
+        const finalWinner = scoreJoueur >= roundsToWin ? "Joueur 1" : (gameMode === "solo" ? "L'IA" : "Joueur 2");
+        resultMessage = `🏆 ${finalWinner} remporte la partie ${scoreJoueur}-${scoreOrdi} !`;
+        
+        isGameActive = false;
+        document.getElementById("start-game").innerText = "Nouvelle partie";
+        document.getElementById("start-game").disabled = false;
+    }
+    
+    document.getElementById("result").innerText = resultMessage;
+    
+    // Si la partie n'est pas terminée, continuer
+    if (isGameActive) {
+        setTimeout(() => startCountdown(classifyVideo), 2000);
     }
 }
 
-// Terminer la partie
-function endGame() {
-    isGameActive = false;
-    let winner = scoreJoueur >= roundsToWin ? "Joueur 1" : (gameMode === "solo" ? "IA" : "Joueur 2");
+// Ajouter un tour à l'historique
+function addToHistory(move1, move2, winner) {
+    const historyItem = document.createElement("div");
+    historyItem.className = "history-item";
     
-    document.getElementById("result").innerHTML = 
-        `<div class="winner-announcement">🏆 ${winner} remporte le tournoi! 🏆</div>`;
-        
-    document.getElementById("start-game").innerText = "Nouvelle partie";
-    document.getElementById("start-game").disabled = false;
+    const winnerClass = winner === 1 ? "winner-p1" : (winner === 2 ? "winner-p2" : "tie");
+    
+    historyItem.innerHTML = `
+        <span class="${winner === 1 ? 'winner' : ''}">${move1}</span>
+        vs
+        <span class="${winner === 2 ? 'winner' : ''}">${move2}</span>
+        <span class="result ${winnerClass}">
+            ${winner === 0 ? '=' : (winner === 1 ? '>' : '<')}
+        </span>
+    `;
+    
+    // Ajouter en haut de l'historique
+    const historyContainer = document.getElementById("game-history");
+    historyContainer.insertBefore(historyItem, historyContainer.firstChild);
+    
+    // Limiter l'historique à 10 entrées
+    if (historyContainer.children.length > 10) {
+        historyContainer.removeChild(historyContainer.lastChild);
+    }
+    
+    // Enregistrer dans le tableau d'historique
+    gameHistory.unshift({
+        player1: move1,
+        player2: move2,
+        winner: winner
+    });
 }
 
 // Fonction pour générer un coup aléatoire pour l'ordinateur
 function getRandomMove() {
     const moves = ["Pierre", "Feuille", "Ciseaux"];
+    
+    // Si nous avons un historique, on peut utiliser une stratégie plus intelligente
+    if (gameHistory.length > 0) {
+        // 30% de chance d'utiliser une stratégie, 70% aléatoire
+        if (Math.random() < 0.3) {
+            // Stratégie simple: contrer le dernier coup du joueur
+            const lastPlayerMove = gameHistory[0].player1;
+            
+            if (lastPlayerMove === "Pierre") return "Feuille";
+            if (lastPlayerMove === "Feuille") return "Ciseaux";
+            if (lastPlayerMove === "Ciseaux") return "Pierre";
+        }
+    }
+    
     return moves[Math.floor(Math.random() * moves.length)];
 }
 
-// Fonction pour déterminer le gagnant et afficher le score
+// Fonction pour déterminer le gagnant
+// Retourne: 0 pour égalité, 1 pour joueur 1, 2 pour joueur 2
 function determineWinner(player1, player2) {
-    if (player1 === "Aucune main" || player2 === "Aucune main") {
-        document.getElementById("result").innerHTML = 
-            `<div class="waiting">⏳ En attente d'un joueur...</div>`;
-        return;
+    if (player1 === player2) {
+        return 0; // Égalité
     }
-
-    let winner = "";
-    let resultClass = "";
-
+    
     if (
         (player1 === "Pierre" && player2 === "Ciseaux") ||
         (player1 === "Feuille" && player2 === "Pierre") ||
         (player1 === "Ciseaux" && player2 === "Feuille")
     ) {
-        winner = "🎉 Joueur 1 gagne !";
-        resultClass = "player1-win";
-        scoreJoueur++;
-    } else if (player1 === player2) {
-        winner = "🤝 Égalité !";
-        resultClass = "draw";
+        return 1; // Joueur 1 gagne
     } else {
-        winner = gameMode === "solo" ? "🔥 L'IA gagne !" : "🔥 Joueur 2 gagne !";
-        resultClass = "player2-win";
-        scoreOrdi++;
+        return 2; // Joueur 2 gagne
     }
-
-    // Ajouter à l'historique
-    gameHistory.push({
-        player1: player1,
-        player2: player2,
-        winner: winner
-    });
-
-    // Mettre à jour l'affichage
-    document.getElementById("result").innerHTML = 
-        `<div class="${resultClass}">${winner}</div>`;
-    
-    updateScoreboard();
-    updateGameHistory();
-}
-
-// Mettre à jour le tableau des scores
-function updateScoreboard() {
-    document.getElementById("score").innerHTML = 
-        `<span class="score-p1">${scoreJoueur}</span> - <span class="score-p2">${scoreOrdi}</span>`;
-}
-
-// Mettre à jour l'historique des parties
-function updateGameHistory() {
-    const historyElement = document.getElementById("game-history");
-    historyElement.innerHTML = "";
-    
-    // Limiter l'historique aux 5 dernières manches
-    const recentHistory = gameHistory.slice(-5);
-    
-    recentHistory.forEach((round, index) => {
-        const roundElement = document.createElement("div");
-        roundElement.className = "history-item";
-        roundElement.innerHTML = `
-            <span class="round-number">Manche ${gameHistory.length - recentHistory.length + index + 1}</span>
-            <span class="move">${round.player1}</span> vs 
-            <span class="move">${round.player2}</span>
-            <span class="result">${round.winner}</span>
-        `;
-        historyElement.appendChild(roundElement);
-    });
 }
 
 // Fonction pour afficher un compte à rebours "1, 2, 3, BOOM !" avant la détection
 function startCountdown(callback) {
     let count = 3;
-    document.getElementById("result").innerHTML = `<div class="countdown-prepare">Préparez-vous...</div>`;
+    document.getElementById("result").innerText = `Préparez-vous...`;
 
     let countdownInterval = setInterval(() => {
         if (count > 0) {
-            document.getElementById("result").innerHTML = `<div class="countdown">${count}</div>`;
+            document.getElementById("result").innerText = `🕒 ${count}...`;
             count--;
         } else {
             clearInterval(countdownInterval);
-            document.getElementById("result").innerHTML = `<div class="countdown-boom">BOOM !</div>`;
+            document.getElementById("result").innerText = "🔥 BOOM ! 🔥";
 
             // Figer les mains et classifier une dernière fois
             setTimeout(() => {
