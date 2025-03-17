@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pierre-Feuille-Ciseaux AI</title>
+
+    <!-- Liens vers les bibliothèques -->
+    <script src="https://unpkg.com/ml5@0.12.2/dist/ml5.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-cpu"></script>
+    
+    <!-- Lien vers le fichier CSS -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Pierre-Feuille-Ciseaux IA</h1>
+            <p class="tagline">Jouez avec votre webcam et l'IA !</p>
+        </header>
+
+        <div id="loading-indicator">
+            <div class="spinner"></div>
+            <p>Chargement du modèle IA...</p>
+        </div>
+
+        <div class="game-container">
+            <div class="video-container">
+                <!-- Vidéo de la webcam (invisible) -->
+                <video id="video" autoplay playsinline style="display: none;"></video>
+                
+                <!-- Canvas pour afficher la vidéo avec overlay des mains -->
+                <canvas id="canvas"></canvas>
+                
+                <div id="hands-count">Mains détectées: 0</div>
+            </div>
+            
+            <div class="game-info">
+                <div id="game-info">Mode: Solo (vs IA)<br>Premier à 3 victoires</div>
+                
+                <div class="moves-display">
+                    <div id="move-p1">Joueur 1: En attente...</div>
+                    <div id="move-p2">IA: En attente...</div>
+                </div>
+                
+                <div id="result">Prêt à jouer ?</div>
+                
+                <div class="score-container">
+                    <h3>Score</h3>
+                    <div id="score"><span class="score-p1">0</span> - <span class="score-p2">0</span></div>
+                </div>
+                
+                <div id="game-controls" style="display: none;">
+                    <button id="toggle-mode" class="btn">Mode: Solo (vs IA)</button>
+                    <button id="start-game" class="btn primary">Commencer la partie</button>
+                    <button id="reset-scores" class="btn secondary">Réinitialiser scores</button>
+                    
+                    <div class="rounds-select">
+                        <label for="rounds-selector">Manches à gagner:</label>
+                        <select id="rounds-selector">
+                            <option value="1">1</option>
+                            <option value="3" selected>3</option>
+                            <option value="5">5</option>
+                            <option value="7">7</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="history-container">
+            <h3>Historique des manches</h3>
+            <div id="game-history"></div>
+        </div>
+        
+        <div class="instructions">
+            <h3>Comment jouer</h3>
+            <ul>
+                <li>Assurez-vous que votre webcam est activée</li>
+                <li>Placez votre main devant la caméra</li>
+                <li>Formez un signe: Pierre (poing fermé), Feuille (main ouverte) ou Ciseaux (deux doigts)</li>
+                <li>Attendez le compte à rebours "BOOM!" et maintenez votre geste</li>
+                <li>En mode duo, deux personnes peuvent jouer avec deux mains différentes dans le champ de la caméra</li>
+            </ul>
+        </div>
+        
+        <footer>
+            <p>Développé avec Teachable Machine et MediaPipe Hands</p>
+        </footer>
+    </div>
+
+    <!-- Lien vers le fichier JS -->
+    <script src="script.js"></script>
+</body>
+</html>
