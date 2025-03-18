@@ -1,6 +1,6 @@
 // Charger le modèle Teachable Machine
 let classifier;
-let modelURL = "https://teachablemachine.withgoogle.com/models/WMlLAhdMKq/model.json";
+let modelURL = "./model/model.json";
 
 // Détection des mains
 let handsDetector;
@@ -10,18 +10,119 @@ let handLandmarks = [];
 // Variables pour le jeu
 let player1Move = "En attente...";
 let player2Move = "En attente...";
+let player1Confidence = 0;
+let player2Confidence = 0;
 let scoreJoueur = 0;
 let scoreOrdi = 0;
 let isGameActive = false;
 let gameMode = "solo"; // "solo" ou "duo"
 let roundsToWin = 3;
 let gameHistory = [];
-let confidence = 0;
 
 // Éléments DOM
 let videoElement;
 let canvasElement;
 let canvasCtx;
+
+// Fonction pour interpréter les gestes à partir des landmarks MediaPipe
+function interpretHandGesture(landmarks) {
+    // Compter les doigts levés
+    let fingersUp = 0;
+    
+    // Si pas de landmarks ou tableau vide, retourner inconnu
+    if (!landmarks || landmarks.length === 0) {
+        return "Inconnu";
+    }
+    
+    // Positions de référence
+    const wrist = landmarks[0];
+    const thumb_tip = landmarks[4];
+    const index_tip = landmarks[8];
+    const middle_tip = landmarks[12];
+    const ring_tip = landmarks[16];
+    const pinky_tip = landmarks[20];
+    const palm_center = landmarks[9]; // Base du majeur
+    
+    // Vérifier si chaque doigt est levé en comparant la hauteur du bout avec la paume
+    if (index_tip.y < palm_center.y) fingersUp++;
+    if (middle_tip.y < palm_center.y) fingersUp++;
+    if (ring_tip.y < palm_center.y) fingersUp++;
+    if (pinky_tip.y < palm_center.y) fingersUp++;
+    
+    // Pouce est un cas spécial, vérifions s'il est écarté
+    const thumb_distance = Math.sqrt(
+        Math.pow(thumb_tip.x - wrist.x, 2) + 
+        Math.pow(thumb_tip.y - wrist.y, 2)
+    );
+    const index_distance = Math.sqrt(
+        Math.pow(index_tip.x - wrist.x, 2) + 
+        Math.pow(index_tip.y - wrist.y, 2)
+    );
+    
+    // Si le pouce est significativement écarté
+    if (thumb_distance > index_distance * 0.7) {
+        fingersUp++;
+    }
+    
+    // Interpréter le geste
+    if (fingersUp <= 1) return "Pierre";  // Poing fermé
+    if (fingersUp >= 4) return "Feuille";  // Main ouverte
+    if (fingersUp == 2) return "Ciseaux";  // Deux doigts
+    
+    return "Inconnu";  // Geste non reconnu
+}
+
+// Fonction auxiliaire pour traiter une main spécifique
+function processHand(handIndex, callback) {
+    // D'abord essayer d'interpréter avec les landmarks (complément à l'IA)
+    const handGesture = interpretHandGesture(handLandmarks[handIndex]);
+    
+    if (handGesture !== "Inconnu") {
+        // Si l'interprétation directe a fonctionné, l'utiliser
+        callback(handGesture, 90);
+    } else {
+        // Sinon, tenter la classification avec l'IA en créant une image de la main
+        // Créer un canvas temporaire ciblant juste cette main
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = videoElement.width;
+        tempCanvas.height = videoElement.height;
+        const tempCtx = tempCanvas.getContext('2d');
+        
+        // Dessiner l'image entière
+        tempCtx.drawImage(videoElement, 0, 0);
+        
+        // Calculer la zone de la main avec une marge
+        let minX = 1.0, minY = 1.0, maxX = 0.0, maxY = 0.0;
+        for (const landmark of handLandmarks[handIndex]) {
+            minX = Math.min(minX, landmark.x);
+            minY = Math.min(minY, landmark.y);
+            maxX = Math.max(maxX, landmark.x);
+            maxY = Math.max(maxY, landmark.y);
+        }
+        
+        // Ajouter une marge
+        const marginX = (maxX - minX) * 0.3;
+        const marginY = (maxY - minY) * 0.3;
+        
+        minX = Math.max(0, minX - marginX) * tempCanvas.width;
+        minY = Math.max(0, minY - marginY) * tempCanvas.height;
+        maxX = Math.min(1, maxX + marginX) * tempCanvas.width;
+        maxY = Math.min(1, maxY + marginY) * tempCanvas.height;
+        
+        const width = maxX - minX;
+        const height = maxY - minY;
+        
+        // Dessiner la région sur le canvas
+        classifier.classify(tempCanvas, (error, results) => {
+            if (error || !results || results.length === 0) {
+                // En cas d'échec, utiliser une valeur par défaut ou le résultat d'interprétation
+                callback("Pierre", 60); // Valeur par défaut
+            } else {
+                callback(results[0].label, Math.round(results[0].confidence * 100));
+            }
+        });
+    }
+}
 
 // Fonction pour initialiser la détection de mains
 async function setupHandsDetection() {
@@ -47,7 +148,7 @@ async function setupHandsDetection() {
         // Dessiner les mains sur le canvas
         drawHands(results);
     });
-
+    
     return handsDetector;
 }
 
@@ -217,7 +318,9 @@ function gotResult(error, results) {
         // Mode solo: le joueur contre l'IA
         if (numHands >= 1) {
             player1Move = results[0].label;
+            player1Confidence = Math.round(results[0].confidence * 100);
             player2Move = getRandomMove();
+            player2Confidence = 100; // L'IA est toujours à 100% de confiance
             
             finishRound();
         } else {
@@ -227,32 +330,7 @@ function gotResult(error, results) {
     } else {
         // Mode duo: deux joueurs humains
         if (numHands === 2) {
-            // Pour le mode duo, nous devons détecter séparément les deux mains
-            // Ici, nous utilisons simplement les coordonnées X pour différencier gauche/droite
-            
-            // Identifier les mains gauche et droite
-            let leftHandIndex = 0;
-            let rightHandIndex = 1;
-            
-            if (handLandmarks[0][0].x > handLandmarks[1][0].x) {
-                leftHandIndex = 1;
-                rightHandIndex = 0;
-            }
-            
-            // Pour simplifier, nous utilisons le même modèle pour les deux mains
-            // En production, il serait préférable d'avoir des régions d'intérêt séparées
-            player1Move = results[0].label; // Utilise le résultat pour la première main
-            
-            // Classificateur pour la deuxième main (normalement, on devrait cropper l'image)
-            classifier.classify(videoElement, (error, secondResults) => {
-                if (!error && secondResults && secondResults.length > 0) {
-                    player2Move = secondResults[0].label;
-                } else {
-                    player2Move = results[0].label; // Fallback
-                }
-                
-                finishRound();
-            });
+            handleDuoMode(results);
         } else {
             document.getElementById("result").innerText = "❓ Deux mains sont nécessaires pour le mode duo !";
             setTimeout(classifyVideo, 1000);
@@ -262,8 +340,8 @@ function gotResult(error, results) {
 
 // Terminer le tour et déterminer le gagnant
 function finishRound() {
-    document.getElementById("move-p1").innerText = `Joueur 1: ${player1Move} (${confidence}%)`;
-    document.getElementById("move-p2").innerText = `${gameMode === "solo" ? "IA" : "Joueur 2"}: ${player2Move}`;
+    document.getElementById("move-p1").innerText = `Joueur 1: ${player1Move} (${player1Confidence}%)`;
+    document.getElementById("move-p2").innerText = `${gameMode === "solo" ? "IA" : "Joueur 2"}: ${player2Move}${gameMode === "duo" ? ` (${player2Confidence}%)` : ''}`;
     
     const winner = determineWinner(player1Move, player2Move);
     let resultMessage = "";
@@ -374,7 +452,7 @@ function determineWinner(player1, player2) {
     }
 }
 
-// Fonction pour afficher un compte à rebours "1, 2, 3, BOOM !" avant la détection
+// Fonction pour afficher un compte à rebours avant la détection
 function startCountdown(callback) {
     let count = 3;
     document.getElementById("result").innerText = `Préparez-vous...`;
@@ -393,6 +471,44 @@ function startCountdown(callback) {
             }, 500);
         }
     }, 1000);
+}
+
+// Modifier la fonction handleDuoMode pour traiter correctement chaque main séparément
+function handleDuoMode(results) {
+    if (numHands !== 2) {
+        document.getElementById("result").innerText = "❓ Deux mains sont nécessaires pour le mode duo !";
+        setTimeout(classifyVideo, 1000);
+        return;
+    }
+    
+    // Identifier quelles mains sont à gauche et à droite
+    let leftHandIndex = 0;
+    let rightHandIndex = 1;
+    
+    // Vérifier quelle main est à gauche et à droite
+    const hand0CenterX = handLandmarks[0].reduce((sum, pt) => sum + pt.x, 0) / handLandmarks[0].length;
+    const hand1CenterX = handLandmarks[1].reduce((sum, pt) => sum + pt.x, 0) / handLandmarks[1].length;
+    
+    if (hand0CenterX > hand1CenterX) {
+        leftHandIndex = 1;
+        rightHandIndex = 0;
+    }
+    
+    // Traitement séparé pour chaque main
+    // Classification joueur 1 (main gauche)
+    processHand(leftHandIndex, (move, confidence) => {
+        player1Move = move;
+        player1Confidence = confidence;
+        
+        // Classification joueur 2 (main droite)
+        processHand(rightHandIndex, (move, confidence) => {
+            player2Move = move;
+            player2Confidence = confidence;
+            
+            // Une fois les deux mains traitées, on termine le tour
+            finishRound();
+        });
+    });
 }
 
 // Lancer l'initialisation au chargement de la page
