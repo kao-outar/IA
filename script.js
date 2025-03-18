@@ -18,6 +18,7 @@ let isGameActive = false;
 let gameMode = "solo"; // "solo" ou "duo"
 let roundsToWin = 3;
 let gameHistory = [];
+let countdownInterval = null; // Pour pouvoir arrêter le compte à rebours
 
 // Éléments DOM
 let videoElement;
@@ -163,8 +164,8 @@ function drawHands(results) {
     // Dessiner les landmarks des mains
     if (results.multiHandLandmarks) {
         for (const landmarks of results.multiHandLandmarks) {
-            drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 3});
-            drawLandmarks(canvasCtx, landmarks, {color: '#FF0000', lineWidth: 1, radius: 3});
+            drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00FFCC', lineWidth: 3});
+            drawLandmarks(canvasCtx, landmarks, {color: '#FF3366', lineWidth: 1, radius: 3});
         }
     }
     
@@ -235,6 +236,13 @@ async function setup() {
 function setupEventListeners() {
     // Bouton pour changer de mode de jeu
     document.getElementById("toggle-mode").addEventListener("click", () => {
+        // Ne pas changer de mode si une partie est en cours
+        if (isGameActive) {
+            const confirmChange = confirm("Changer de mode va arrêter la partie en cours. Continuer ?");
+            if (!confirmChange) return;
+            stopGame();
+        }
+        
         gameMode = gameMode === "solo" ? "duo" : "solo";
         const modeText = gameMode === "solo" ? "Solo (vs IA)" : "Duo (2 joueurs)";
         document.getElementById("toggle-mode").innerText = `Mode: ${modeText}`;
@@ -246,6 +254,16 @@ function setupEventListeners() {
     
     // Sélecteur de nombre de manches
     document.getElementById("rounds-selector").addEventListener("change", (e) => {
+        // Ne pas changer de nombre de manches si une partie est en cours
+        if (isGameActive) {
+            const confirmChange = confirm("Changer le nombre de manches va arrêter la partie en cours. Continuer ?");
+            if (!confirmChange) {
+                e.target.value = roundsToWin; // Restaurer la valeur précédente
+                return;
+            }
+            stopGame();
+        }
+        
         roundsToWin = parseInt(e.target.value);
         document.getElementById("game-info").innerText = `Mode: ${gameMode === "solo" ? "Solo (vs IA)" : "Duo (2 joueurs)"}\nPremier à ${roundsToWin} victoires`;
     });
@@ -253,8 +271,33 @@ function setupEventListeners() {
     // Bouton pour commencer la partie
     document.getElementById("start-game").addEventListener("click", startGame);
     
+    // NOUVEAU: Bouton pour arrêter la partie
+    document.getElementById("stop-game").addEventListener("click", stopGame);
+    
     // Bouton pour réinitialiser les scores
     document.getElementById("reset-scores").addEventListener("click", resetScores);
+}
+
+// NOUVELLE FONCTION: Arrêter la partie en cours
+function stopGame() {
+    if (!isGameActive) return;
+    
+    // Arrêter le compte à rebours s'il est en cours
+    if (countdownInterval) {
+        clearInterval(countdownInterval);
+        countdownInterval = null;
+    }
+    
+    isGameActive = false;
+    document.getElementById("start-game").innerText = "Commencer la partie";
+    document.getElementById("start-game").disabled = false;
+    document.getElementById("result").innerText = "Partie arrêtée";
+    
+    // Ajouter une animation de pulsation rouge
+    document.getElementById("result").classList.add("pulse");
+    setTimeout(() => {
+        document.getElementById("result").classList.remove("pulse");
+    }, 2000);
 }
 
 // Fonction pour commencer une nouvelle partie
@@ -272,6 +315,13 @@ function startGame() {
 
 // Fonction pour réinitialiser les scores
 function resetScores() {
+    // Ne pas réinitialiser si une partie est en cours
+    if (isGameActive) {
+        const confirmReset = confirm("Réinitialiser les scores va arrêter la partie en cours. Continuer ?");
+        if (!confirmReset) return;
+        stopGame();
+    }
+    
     scoreJoueur = 0;
     scoreOrdi = 0;
     gameHistory = [];
@@ -300,6 +350,8 @@ function classifyVideo() {
 
 // Fonction pour traiter les résultats après classification
 function gotResult(error, results) {
+    if (!isGameActive) return; // Si la partie a été arrêtée entre temps
+    
     if (error) {
         console.error("Erreur de classification:", error);
         document.getElementById("result").innerText = `Erreur: ${error.message || "Classification échouée"}`;
@@ -340,6 +392,8 @@ function gotResult(error, results) {
 
 // Terminer le tour et déterminer le gagnant
 function finishRound() {
+    if (!isGameActive) return; // Si la partie a été arrêtée entre temps
+    
     document.getElementById("move-p1").innerText = `Joueur 1: ${player1Move} (${player1Confidence}%)`;
     document.getElementById("move-p2").innerText = `${gameMode === "solo" ? "IA" : "Joueur 2"}: ${player2Move}${gameMode === "duo" ? ` (${player2Confidence}%)` : ''}`;
     
@@ -349,9 +403,11 @@ function finishRound() {
     if (winner === 1) {
         scoreJoueur++;
         resultMessage = "🎉 Joueur 1 gagne !";
+        document.getElementById("result").classList.add("winner-result");
     } else if (winner === 2) {
         scoreOrdi++;
         resultMessage = gameMode === "solo" ? "🔥 L'IA gagne !" : "🔥 Joueur 2 gagne !";
+        document.getElementById("result").classList.add("winner-result");
     } else {
         resultMessage = "🤝 Égalité !";
     }
@@ -371,13 +427,25 @@ function finishRound() {
         isGameActive = false;
         document.getElementById("start-game").innerText = "Nouvelle partie";
         document.getElementById("start-game").disabled = false;
+        
+        // Ajouter une animation de célébration pour le gagnant
+        document.getElementById("result").classList.add("pulse");
     }
     
     document.getElementById("result").innerText = resultMessage;
     
     // Si la partie n'est pas terminée, continuer
     if (isGameActive) {
-        setTimeout(() => startCountdown(classifyVideo), 2000);
+        setTimeout(() => {
+            document.getElementById("result").classList.remove("winner-result");
+            startCountdown(classifyVideo);
+        }, 2000);
+    } else {
+        // Nettoyer les animations après quelques secondes
+        setTimeout(() => {
+            document.getElementById("result").classList.remove("winner-result");
+            document.getElementById("result").classList.remove("pulse");
+        }, 5000);
     }
 }
 
@@ -454,20 +522,33 @@ function determineWinner(player1, player2) {
 
 // Fonction pour afficher un compte à rebours avant la détection
 function startCountdown(callback) {
+    if (!isGameActive) return; // Ne pas démarrer si le jeu n'est plus actif
+    
     let count = 3;
     document.getElementById("result").innerText = `Préparez-vous...`;
 
-    let countdownInterval = setInterval(() => {
+    // Stocker l'interval pour pouvoir l'arrêter si nécessaire
+    countdownInterval = setInterval(() => {
+        if (!isGameActive) {
+            // Si le jeu a été arrêté pendant le compte à rebours
+            clearInterval(countdownInterval);
+            countdownInterval = null;
+            return;
+        }
+        
         if (count > 0) {
             document.getElementById("result").innerText = `🕒 ${count}...`;
             count--;
         } else {
             clearInterval(countdownInterval);
+            countdownInterval = null;
             document.getElementById("result").innerText = "🔥 BOOM ! 🔥";
 
             // Figer les mains et classifier une dernière fois
             setTimeout(() => {
-                callback();
+                if (isGameActive) { // Vérifier si le jeu est toujours actif
+                    callback();
+                }
             }, 500);
         }
     }, 1000);
@@ -475,6 +556,8 @@ function startCountdown(callback) {
 
 // Modifier la fonction handleDuoMode pour traiter correctement chaque main séparément
 function handleDuoMode(results) {
+    if (!isGameActive) return; // Si la partie a été arrêtée entre temps
+    
     if (numHands !== 2) {
         document.getElementById("result").innerText = "❓ Deux mains sont nécessaires pour le mode duo !";
         setTimeout(classifyVideo, 1000);
@@ -497,11 +580,15 @@ function handleDuoMode(results) {
     // Traitement séparé pour chaque main
     // Classification joueur 1 (main gauche)
     processHand(leftHandIndex, (move, confidence) => {
+        if (!isGameActive) return; // Vérifier encore si le jeu est actif
+        
         player1Move = move;
         player1Confidence = confidence;
         
         // Classification joueur 2 (main droite)
         processHand(rightHandIndex, (move, confidence) => {
+            if (!isGameActive) return; // Vérifier encore si le jeu est actif
+            
             player2Move = move;
             player2Confidence = confidence;
             
